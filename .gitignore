@@ -13,3 +13,6 @@ credentials*
 secrets*
 token*
 *.token
+PatchInput/
+work/
+tools/
