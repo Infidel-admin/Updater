@@ -26,7 +26,10 @@ def fail(reason: str) -> None:
 
 
 def load_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    # Publisher writes pride-assets.v1.json with Encoding.UTF8, which includes a UTF-8 BOM.
+    # utf-8-sig strips an optional BOM and otherwise matches utf-8. Signature verification
+    # still uses raw manifest bytes, not this helper.
+    return path.read_text(encoding="utf-8-sig")
 
 
 def sha256_file(path: Path) -> str:
@@ -167,7 +170,7 @@ def main() -> int:
     if (root / ASSETS_NAME).is_file():
         try:
             idx = json.loads(load_text(root / ASSETS_NAME))
-        except Exception:
+        except json.JSONDecodeError:
             fail("ASSETS_JSON")
         mapped = idx.get("objects")
         if not isinstance(mapped, dict):
