@@ -1,0 +1,103 @@
+name: Publish isolated test patch
+# Owner daily flow after GitHub Desktop Push to main: no Run workflow,
+# no manual Release, no asset upload, no tag copy.
+# workflow_dispatch is optional diagnosis only.
+# First Push of this file and/or scripts/** also runs the job, so
+# already-tracked release-assets are published even when that commit
+# does not change release-assets/**.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "release-assets/**"
+      - ".github/workflows/publish-test-release.yml"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: isolated-test-release
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validator
+        run: python -m pip install -r scripts/requirements-validate.txt
+
+      - name: Validate signed public assets
+        run: python scripts/validate-release-assets.py --assets-dir release-assets
+
+      - name: Publish immutable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PROTECTED_TAG="test-2ar43a-001"
+          TAG="test-${GITHUB_SHA:0:12}"
+          echo "PROPOSED_TAG=${TAG}"
+          if [ "${TAG}" = "${PROTECTED_TAG}" ] || [ "${TAG}" = "latest" ] || [ "${TAG}" = "production" ]; then
+            echo "OK=NO"
+            echo "reason=PROTECTED_OR_PRODUCTION_TAG:${TAG}"
+            exit 2
+          fi
+          if gh release view "${PROTECTED_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "PROTECTED_RELEASE_PRESENT=YES"
+          else
+            echo "OK=NO"
+            echo "reason=PROTECTED_RELEASE_MISSING:${PROTECTED_TAG}"
+            exit 2
+          fi
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "OK=NO"
+            echo "reason=TAG_EXISTS_NO_OVERWRITE:${TAG}"
+            exit 2
+          fi
+          mapfile -t FILES < <(python scripts/validate-release-assets.py --assets-dir release-assets --list-upload)
+          if [ "${#FILES[@]}" -lt 3 ]; then
+            echo "OK=NO"
+            echo "reason=UPLOAD_LIST_SHORT"
+            exit 2
+          fi
+          STAGE="$(mktemp -d)"
+          OBJ_COUNT=0
+          for f in "${FILES[@]}"; do
+            bn="$(basename "${f}")"
+            cp -n "${f}" "${STAGE}/${bn}"
+            case "${bn}" in
+              obj-*) OBJ_COUNT=$((OBJ_COUNT + 1)) ;;
+            esac
+          done
+          if [ ! -f "${STAGE}/pride-manifest.v1.json" ] || [ ! -f "${STAGE}/pride-manifest.v1.json.sig" ] || [ "${OBJ_COUNT}" -lt 1 ]; then
+            echo "OK=NO"
+            echo "reason=STAGED_ASSETS_INCOMPLETE"
+            exit 2
+          fi
+          echo "STAGED_OBJECT_COUNT=${OBJ_COUNT}"
+          NOTES="Isolated TEST patch. Not production. GitHubReleaseProvider must GET /repos/${GITHUB_REPOSITORY}/releases/tags/${TAG} — not /releases/latest. Historical release ${PROTECTED_TAG} is unchanged. Signatures are created only by the private publisher."
+          gh release create "${TAG}" "${STAGE}"/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "${TAG}" \
+            --notes "${NOTES}" \
+            --prerelease \
+            --latest=false
+          echo "OK=YES"
+          echo "TEST_CHANNEL_ISOLATED=YES"
+          echo "OLD_RELEASES_PRESERVED=YES"
+          echo "RELEASE_TAG=${TAG}"
+          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
