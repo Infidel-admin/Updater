@@ -1,0 +1,15 @@
+# Private signing / publishing material — never commit
+keys/
+**/keys/
+update-signing.v1
+*.key
+*.pem
+*.pfx
+*.p12
+*.secret
+.env
+.env.*
+credentials*
+secrets*
+token*
+*.token
